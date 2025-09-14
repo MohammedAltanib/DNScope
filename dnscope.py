@@ -1,147 +1,284 @@
-import duckdb
+#!/usr/bin/env python3
+# dnscope.py — Analyze DNS IBR from PCAP/Parquet with charts and optional Geo maps
+
 import sys
-import matplotlib.pyplot as plt
-import pyfiglet
-import pandas as pd
-from scapy.all import rdpcap, DNS, DNSQR, IP
 import os
-import geoip2.database
-import geopandas as gpd
-from shapely.geometry import Point
+import argparse
+import duckdb
+import pandas as pd
 
-# ---------------- Banner ----------------
-ascii_banner = pyfiglet.figlet_format("Mohammed Altanib")
-print(ascii_banner)
-print("="*70)
-print("        C8 Project - Noroff University Cyber Security")
-print("="*70)
+# --- Optional/variant imports ---
+# Scapy (streaming reader is better than rdpcap for large files)
+try:
+    from scapy.utils import PcapReader
+    from scapy.layers.dns import DNS, DNSQR
+    from scapy.layers.inet import IP
+except Exception:
+    from scapy.all import PcapReader, DNS, DNSQR, IP  # type: ignore
 
-if len(sys.argv) < 2:
-    print("Usage: python3 mav5.py dns_records.pcapng")
-    sys.exit(1)
+# Banner (fallback if not installed)
+try:
+    import pyfiglet
+except Exception:
+    pyfiglet = None
 
-input_file = sys.argv[1]
-print(f"[+] Processing {input_file}")
+# Plotting
+import matplotlib.pyplot as plt
 
-# ---------------- Step 1: PCAP -> Parquet ----------------
-if input_file.endswith(".pcap") or input_file.endswith(".pcapng"):
-    print("[+] Extracting DNS packets from PCAP/PCAPNG...")
-    packets = rdpcap(input_file)
+# Parquet writer (for chunked streaming without append)
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+# Geo (optional)
+try:
+    import geoip2.database  # type: ignore
+    import geopandas as gpd  # type: ignore
+    from shapely.geometry import Point  # type: ignore
+    GEO_EXTRAS_OK = True
+except Exception:
+    GEO_EXTRAS_OK = False
+
+
+# ---------------- Utilities ----------------
+def banner(text="DNScope"):
+    if pyfiglet:
+        try:
+            ascii_banner = pyfiglet.figlet_format(text)
+            print(ascii_banner)
+        except Exception:
+            print(f"=== {text} ===")
+    else:
+        print(f"=== {text} ===")
+
+    print("=" * 70)
+    print(" C8 Project - Noroff University Cyber Security - MOHAMMED ALTANIB")
+    print("=" * 70)
+
+
+def normalize_qname(qname: bytes) -> str:
+    """Decode, lowercase, and strip trailing dot from a DNS qname."""
+    try:
+        s = qname.decode(errors="ignore")
+    except Exception:
+        return ""
+    return s.strip().lower().rstrip(".")
+
+
+# Common DNS QTYPE mapping
+QTYPE_MAP = {
+    1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX",
+    16: "TXT", 28: "AAAA", 33: "SRV", 255: "ANY"
+}
+
+# Naive benign keywords (placeholder heuristic)
+BENIGN_KEYWORDS = {"mozilla", "google", "firefox", "microsoft", "windows"}
+
+
+# ---------------- PCAP -> Parquet (streaming) ----------------
+def stream_pcap_to_parquet(pcap_path: str, parquet_path: str):
+    """Stream a PCAP/PCAPNG file and write DNS query rows into Parquet using PyArrow writer."""
+    os.makedirs(os.path.dirname(parquet_path) or ".", exist_ok=True)
 
     records = []
-    for pkt in packets:
-        if pkt.haslayer(DNS) and pkt.haslayer(DNSQR):
-            try:
-                src_ip = pkt[IP].src if pkt.haslayer(IP) else None
-                query_name = pkt[DNSQR].qname.decode(errors="ignore") if pkt[DNSQR].qname else None
-                query_type = pkt[DNSQR].qtype
-                timestamp = pkt.time
+    count = 0
 
-                benign_keywords = ["mozilla", "google", "firefox", "microsoft", "windows"]
-                if query_name and any(k in query_name.lower() for k in benign_keywords):
-                    classification = "benign"
-                else:
-                    classification = "suspicious"
+    schema = pa.schema([
+        pa.field("src_ip", pa.string()),
+        pa.field("query_name", pa.string()),
+        pa.field("query_type", pa.int32()),
+        pa.field("timestamp", pa.float64()),
+        pa.field("classification", pa.string()),
+    ])
 
-                records.append([src_ip, query_name, query_type, timestamp, classification])
+    # Ensure a fresh file each run (no unsupported append with PyArrow)
+    if os.path.exists(parquet_path):
+        os.remove(parquet_path)
 
-            except Exception:
-                continue
+    writer = pq.ParquetWriter(parquet_path, schema=schema, compression="snappy")
 
-    df = pd.DataFrame(records, columns=["src_ip", "query_name", "query_type", "timestamp", "classification"])
-    parquet_file = input_file + ".parquet"
-    df.to_parquet(parquet_file, engine="pyarrow", compression="snappy")
-    print(f"[+] Saved extracted DNS data to {parquet_file}")
+    try:
+        with PcapReader(pcap_path) as pr:
+            for pkt in pr:
+                count += 1
+                if pkt is None or not pkt.haslayer(DNS) or not pkt.haslayer(DNSQR):
+                    continue
+                try:
+                    src_ip = pkt[IP].src if pkt.haslayer(IP) else None
+                    qname = normalize_qname(pkt[DNSQR].qname or b"")
+                    qtype = int(pkt[DNSQR].qtype or 0)
+                    ts = float(getattr(pkt, "time", 0.0))
 
-else:
-    parquet_file = input_file
+                    classification = "benign" if (qname and any(k in qname for k in BENIGN_KEYWORDS)) else "suspicious"
 
-# ---------------- Step 2: DuckDB Analysis ----------------
-print(f"[+] Analyzing {parquet_file}")
+                    records.append((src_ip, qname, qtype, ts, classification))
 
-top_domains = duckdb.query(f"""
-SELECT query_name, COUNT(*) as freq
-FROM '{parquet_file}'
-WHERE query_name IS NOT NULL
-GROUP BY query_name
-ORDER BY freq DESC
-LIMIT 10
-""").to_df()
+                    # Flush every 100k rows to control memory usage
+                    if len(records) >= 100_000:
+                        df_chunk = pd.DataFrame(records, columns=["src_ip", "query_name", "query_type", "timestamp", "classification"])
+                        table = pa.Table.from_pandas(df_chunk, schema=schema, preserve_index=False)
+                        writer.write_table(table)
+                        records.clear()
+                except Exception:
+                    # Skip malformed packets
+                    continue
 
-top_ips = duckdb.query(f"""
-SELECT src_ip, COUNT(*) as freq
-FROM '{parquet_file}'
-WHERE src_ip IS NOT NULL
-GROUP BY src_ip
-ORDER BY freq DESC
-LIMIT 10
-""").to_df()
+        # Write remaining rows
+        if records:
+            df_chunk = pd.DataFrame(records, columns=["src_ip", "query_name", "query_type", "timestamp", "classification"])
+            table = pa.Table.from_pandas(df_chunk, schema=schema, preserve_index=False)
+            writer.write_table(table)
 
-query_types = duckdb.query(f"""
-SELECT query_type, COUNT(*) as freq
-FROM '{parquet_file}'
-WHERE query_type IS NOT NULL
-GROUP BY query_type
-ORDER BY freq DESC
-""").to_df()
+        print(f"[+] Saved extracted DNS data to {parquet_path} (from {count:,} packets)")
+    finally:
+        writer.close()
 
-classification_stats = duckdb.query(f"""
-SELECT classification, COUNT(*) as freq
-FROM '{parquet_file}'
-GROUP BY classification
-""").to_df()
 
-print("\n=== Top 10 Queried Domains ===")
-print(top_domains)
-print("\n=== Top 10 Source IPs ===")
-print(top_ips)
-print("\n=== DNS Query Type Distribution ===")
-print(query_types)
-print("\n=== Benign vs Suspicious Queries ===")
-print(classification_stats)
+# ---------------- DuckDB helpers ----------------
+def _set_duckdb_threads(con):
+    """Try to set threads=auto; fallback to CPU-1; ignore if unsupported."""
+    try:
+        con.execute("PRAGMA threads=auto;")
+        return
+    except Exception:
+        pass
+    try:
+        threads = max(1, (os.cpu_count() or 2) - 1)
+        con.execute(f"PRAGMA threads={threads};")
+    except Exception:
+        pass  # continue with defaults
 
-# ---------------- Step 3: Save CSVs ----------------
-top_domains.to_csv("top_domains.csv", index=False)
-top_ips.to_csv("top_ips.csv", index=False)
-query_types.to_csv("query_types.csv", index=False)
-classification_stats.to_csv("classification_stats.csv", index=False)
 
-print("\n[+] Results saved as CSV (top_domains.csv, top_ips.csv, query_types.csv, classification_stats.csv)")
+# ---------------- Analysis with DuckDB ----------------
+def analyze_with_duckdb(parquet_path: str, top_n: int = 10):
+    con = duckdb.connect()
+    _set_duckdb_threads(con)
 
-# ---------------- Step 4: Charts ----------------
-plt.figure(figsize=(10,5))
-plt.bar(top_domains['query_name'], top_domains['freq'], color='skyblue')
-plt.xticks(rotation=45, ha='right')
-plt.title("Top 10 Queried Domains")
-plt.tight_layout()
-plt.savefig("top_domains.png")
-plt.close()
+    top_domains = con.execute(f"""
+        SELECT query_name, COUNT(*) AS freq
+        FROM read_parquet('{parquet_path}')
+        WHERE query_name IS NOT NULL AND query_name <> ''
+        GROUP BY query_name
+        ORDER BY freq DESC
+        LIMIT {top_n}
+    """).df()
 
-plt.figure(figsize=(10,5))
-plt.bar(top_ips['src_ip'], top_ips['freq'], color='lightgreen')
-plt.xticks(rotation=45, ha='right')
-plt.title("Top 10 Source IPs")
-plt.tight_layout()
-plt.savefig("top_ips.png")
-plt.close()
+    top_ips = con.execute(f"""
+        SELECT src_ip, COUNT(*) AS freq
+        FROM read_parquet('{parquet_path}')
+        WHERE src_ip IS NOT NULL AND src_ip <> ''
+        GROUP BY src_ip
+        ORDER BY freq DESC
+        LIMIT {top_n}
+    """).df()
 
-plt.figure(figsize=(6,6))
-plt.pie(query_types['freq'], labels=query_types['query_type'], autopct='%1.1f%%')
-plt.title("DNS Query Type Distribution")
-plt.savefig("query_types.png")
-plt.close()
+    query_types = con.execute(f"""
+        SELECT query_type, COUNT(*) AS freq
+        FROM read_parquet('{parquet_path}')
+        WHERE query_type IS NOT NULL
+        GROUP BY query_type
+        ORDER BY freq DESC
+    """).df()
 
-plt.figure(figsize=(6,6))
-plt.pie(classification_stats['freq'], labels=classification_stats['classification'], autopct='%1.1f%%')
-plt.title("Benign vs Suspicious Queries")
-plt.savefig("classification.png")
-plt.close()
+    classification_stats = con.execute(f"""
+        SELECT classification, COUNT(*) AS freq
+        FROM read_parquet('{parquet_path}')
+        GROUP BY classification
+        ORDER BY freq DESC
+    """).df()
 
-print("[+] Charts saved as PNG")
+    con.close()
 
-# ---------------- Step 5: GeoIP + World Map ----------------
-geoip_db = "/usr/share/GeoIP/GeoLite2-City.mmdb"
-if os.path.exists(geoip_db):
+    # Map qtype numbers -> names for readability
+    if not query_types.empty:
+        query_types["qtype"] = query_types["query_type"].map(QTYPE_MAP).fillna(query_types["query_type"].astype(str))
+
+    return top_domains, top_ips, query_types, classification_stats
+
+
+# ---------------- Outputs ----------------
+def save_tables_csv(out_dir, top_domains, top_ips, query_types, classification_stats):
+    os.makedirs(out_dir, exist_ok=True)
+    top_domains.to_csv(os.path.join(out_dir, "top_domains.csv"), index=False)
+    top_ips.to_csv(os.path.join(out_dir, "top_ips.csv"), index=False)
+
+    # Save query types with readable label if present
+    qt = query_types.copy()
+    if "qtype" in qt.columns:
+        qt = qt[["qtype", "freq"]].rename(columns={"qtype": "query_type"})
+    qt.to_csv(os.path.join(out_dir, "query_types.csv"), index=False)
+
+    classification_stats.to_csv(os.path.join(out_dir, "classification_stats.csv"), index=False)
+    print("[+] Results saved as CSV (top_domains.csv, top_ips.csv, query_types.csv, classification_stats.csv)")
+
+
+def plot_charts(out_dir, top_domains, top_ips, query_types, classification_stats):
+    os.makedirs(out_dir, exist_ok=True)
+
+    if not top_domains.empty:
+        plt.figure(figsize=(10, 5))
+        plt.bar(top_domains["query_name"], top_domains["freq"])
+        plt.xticks(rotation=45, ha="right")
+        plt.title("Top Queried Domains")
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "top_domains.png"), bbox_inches="tight")
+        plt.close()
+
+    if not top_ips.empty:
+        plt.figure(figsize=(10, 5))
+        plt.bar(top_ips["src_ip"], top_ips["freq"])
+        plt.xticks(rotation=45, ha="right")
+        plt.title("Top Source IPs")
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "top_ips.png"), bbox_inches="tight")
+        plt.close()
+
+    if not query_types.empty:
+        labels = query_types["qtype"] if "qtype" in query_types.columns else query_types["query_type"].astype(str)
+        plt.figure(figsize=(6, 6))
+        plt.pie(query_types["freq"], labels=labels, autopct="%1.1f%%")
+        plt.title("DNS Query Type Distribution")
+        plt.savefig(os.path.join(out_dir, "query_types.png"), bbox_inches="tight")
+        plt.close()
+
+    if not classification_stats.empty:
+        plt.figure(figsize=(6, 6))
+        plt.pie(classification_stats["freq"], labels=classification_stats["classification"], autopct="%1.1f%%")
+        plt.title("Benign vs Suspicious Queries")
+        plt.savefig(os.path.join(out_dir, "classification.png"), bbox_inches="tight")
+        plt.close()
+
+    print("[+] Charts saved as PNG (top_domains.png, top_ips.png, query_types.png, classification.png)")
+
+
+# ---------------- GeoIP + World Map (optional) ----------------
+def geoip_map(parquet_path: str, out_dir: str, geoip_db: str, world_shp: str):
+    if not GEO_EXTRAS_OK:
+        print("[!] Geo extras not installed. Skipping GeoIP map.")
+        return
+
+    if not (geoip_db and os.path.exists(geoip_db)):
+        print("[!] GeoIP database not found. Skipping map.")
+        return
+    if not (world_shp and os.path.exists(world_shp)):
+        print("[!] World shapefile not found. Skipping map.")
+        return
+
+    # Load parquet for classification lookup
+    df = pd.read_parquet(parquet_path)
+
+    # Compute top IPs (10) for mapping
+    con = duckdb.connect()
+    top_ips = con.execute(f"""
+        SELECT src_ip, COUNT(*) AS freq
+        FROM read_parquet('{parquet_path}')
+        WHERE src_ip IS NOT NULL AND src_ip <> ''
+        GROUP BY src_ip
+        ORDER BY freq DESC
+        LIMIT 10
+    """).df()
+    con.close()
+
+    # Geolocate
     geo_records = []
     reader = geoip2.database.Reader(geoip_db)
     for _, row in top_ips.iterrows():
@@ -151,39 +288,113 @@ if os.path.exists(geoip_db):
             lat = response.location.latitude
             lon = response.location.longitude
             country = response.country.name
-            classification = df[df["src_ip"] == ip]["classification"].mode()[0]
-            geo_records.append([ip, country, lat, lon, classification])
-        except:
-            geo_records.append([ip, "Unknown", None, None, "Unknown"])
+        except Exception:
+            lat = lon = None
+            country = "Unknown"
+
+        try:
+            classification = df.loc[df["src_ip"] == ip, "classification"].mode().iat[0]
+        except Exception:
+            classification = "Unknown"
+
+        geo_records.append([ip, country, lat, lon, classification])
     reader.close()
 
     geo_df = pd.DataFrame(geo_records, columns=["src_ip", "country", "lat", "lon", "classification"])
-    geo_df.to_csv("geoip_info.csv", index=False)
+    geo_df.to_csv(os.path.join(out_dir, "geoip_info.csv"), index=False)
     print("[+] GeoIP info saved as geoip_info.csv")
 
-    world = gpd.read_file("world_shapefile/ne_110m_admin_0_countries.shp")
-
+    # Plot world + points
+    world = gpd.read_file(world_shp)
     geo_clean = geo_df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+    if geo_clean.empty:
+        print("[!] No geolocatable IPs to plot.")
+        return
+
     gdf_points = gpd.GeoDataFrame(
         geo_clean,
         geometry=[Point(xy) for xy in zip(geo_clean["lon"], geo_clean["lat"])],
         crs="EPSG:4326"
     )
 
-    colors = gdf_points["classification"].map({"benign": "green", "suspicious": "red", "Unknown": "gray"})
+    color_map = {"benign": "green", "suspicious": "red", "Unknown": "gray"}
+    colors = gdf_points["classification"].map(lambda c: color_map.get(str(c).lower(), "gray"))
 
-    fig, ax = plt.subplots(figsize=(12,6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     world.plot(ax=ax, color="lightgrey", edgecolor="black")
-    gdf_points.plot(ax=ax, color=colors, markersize=60, alpha=0.8)
-
-    for idx, row in gdf_points.iterrows():
-        ax.annotate(row["src_ip"], (row["lon"], row["lat"]), fontsize=8, color="blue")
-
-    plt.title("Geographic Distribution of DNS Source IPs (Benign=Green, Suspicious=Red)")
-    plt.savefig("world_map_ips.png")
+    gdf_points.plot(ax=ax, color=colors, markersize=60, alpha=0.85)
+    for _, r in gdf_points.iterrows():
+        ax.annotate(r["src_ip"], (r["lon"], r["lat"]), fontsize=8)
+    plt.title("Geographic Distribution of DNS Source IPs")
+    out_path = os.path.join(out_dir, "world_map_ips.png")
+    plt.savefig(out_path, bbox_inches="tight")
     plt.close()
+    print(f"[+] World map saved as {out_path}")
 
-    print("[+] World map saved as world_map_ips.png")
 
-else:
-    print("[!] GeoIP database not found. Skipping map.")
+# ---------------- Main ----------------
+def main():
+    parser = argparse.ArgumentParser(description="Analyze DNS Internet Background Radiation from PCAP/Parquet.")
+    parser.add_argument("input", help="PCAP/PCAPNG or Parquet file")
+    parser.add_argument("--out", default="outputs", help="Output directory (default: outputs)")
+    parser.add_argument("--top-n", type=int, default=10, help="Top N domains/IPs (default: 10)")
+    parser.add_argument("--geoip-db", default="/usr/share/GeoIP/GeoLite2-City.mmdb", help="Path to GeoLite2-City.mmdb")
+    parser.add_argument("--world-shp", default="world_shapefile/ne_110m_admin_0_countries.shp", help="Path to world shapefile (.shp)")
+    parser.add_argument("--no-charts", action="store_true", help="Skip generating charts")
+    parser.add_argument("--no-geo", action="store_true", help="Skip GeoIP/world map")
+    parser.add_argument("--no-banner", action="store_true", help="Hide ASCII banner")
+    parser.add_argument("--banner-text", default="DNScope", help="Text for ASCII banner (default: DNScope)")
+
+    args = parser.parse_args()
+
+    if not args.no_banner:
+        banner(args.banner_text)
+
+    inp = args.input
+    os.makedirs(args.out, exist_ok=True)
+
+    # Decide parquet target
+        # Decide parquet target
+    if inp.endswith((".pcap", ".pcapng", ".pcap.gz")):
+        parquet_path = os.path.join(args.out, os.path.basename(inp) + ".parquet")
+        print(f"[+] Processing PCAP: {inp}")
+        stream_pcap_to_parquet(inp, parquet_path)
+    elif inp.endswith(".parquet"):
+        parquet_path = inp
+        print(f"[+] Using existing Parquet: {parquet_path}")
+    else:
+        print(f"[!] Unknown file type: {inp}")
+        sys.exit(1)
+
+
+    print(f"[+] Analyzing {parquet_path}")
+    top_domains, top_ips, query_types, classification_stats = analyze_with_duckdb(parquet_path, top_n=args.top_n)
+
+    # Console previews
+    pd.set_option("display.max_rows", 20)
+    print("\n=== Top Queried Domains ===")
+    print(top_domains)
+    print("\n=== Top Source IPs ===")
+    print(top_ips)
+    print("\n=== DNS Query Type Distribution ===")
+    print(query_types if "qtype" not in query_types.columns else query_types[["qtype", "freq"]])
+    print("\n=== Benign vs Suspicious Queries ===")
+    print(classification_stats)
+
+    # Save tables + charts
+    save_tables_csv(args.out, top_domains, top_ips, query_types, classification_stats)
+    if not args.no_charts:
+        plot_charts(args.out, top_domains, top_ips, query_types, classification_stats)
+
+    # Geo map (optional)
+    if not args.no_geo:
+        geoip_map(parquet_path, args.out, args.geoip_db, args.world_shp)
+
+    print("\n[✓] Done.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        print("Usage: python dnscope.py <input.pcapng|input.parquet> [--out outputs] [--no-geo]")
+        sys.exit(1)
+    main()
