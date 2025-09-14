@@ -1,6 +1,6 @@
 # DNScope 🔍
 
-![Banner](images/banner.png)
+![Banner](images/banner2.png)
 
 This project was created as part of my **Bachelor Project (C8 - Noroff University, Cyber Security)**.  
 It focuses on analyzing **DNS Internet Background Radiation** using Cloud Telescope datasets.
