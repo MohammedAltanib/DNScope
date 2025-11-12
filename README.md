@@ -16,7 +16,7 @@ A Python tool for analysing **DNS Internet Background Radiation (IBR)** from PCA
 3. **Converted CSV → Parquet** with `csv_to_parquet_addcols.py` (adds `src_24`, `eTLD+1`) → `/mnt/data/dataset3_parquet/e3/dns_*.parquet`  
 4. **Merging now:** merging ~21k Parquet files into unified dataset using two scripts (conversion + merge).
 5. **Analyse the complete required parquet file.
-5ز 
+ 
 ## Core scripts
 - `fast_extract.py` — pcap → CSV (tshark)
 - `csv_to_parquet_addcols.py` — CSV → Parquet (adds analysis columns)
