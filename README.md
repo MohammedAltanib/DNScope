@@ -2,7 +2,7 @@
 
 ![Banner](images/banner2.png)
 
-A Python tool for analyzing **DNS Internet Background Radiation (IBR)** from PCAP/PCAPNG files. Built as part of the **Bachelor Project (C8 – Noroff University, Cyber Security)** using **Cloud Telescope** datasets.
+A Python tool for analysing **DNS Internet Background Radiation (IBR)** from PCAP/PCAPNG files. Built as part of the **Bachelor Project (C8 – Noroff University, Cyber Security)** using **Cloud Telescope** datasets.
 ---
 # DNS-in-IBR — Processing log (concise)
 
@@ -15,11 +15,12 @@ A Python tool for analyzing **DNS Internet Background Radiation (IBR)** from PCA
 2. **Extracted DNS** to temporary CSVs using `tshark` → `/tmp/dns_fast_8xjoxii_/dns_*.csv`  
 3. **Converted CSV → Parquet** with `csv_to_parquet_addcols.py` (adds `src_24`, `eTLD+1`) → `/mnt/data/dataset3_parquet/e3/dns_*.parquet`  
 4. **Merging now:** merging ~21k Parquet files into unified dataset using two scripts (conversion + merge).
-
+5. **Analyse the complete required parquet file.
+5ز 
 ## Core scripts
 - `fast_extract.py` — pcap → CSV (tshark)
 - `csv_to_parquet_addcols.py` — CSV → Parquet (adds analysis columns)
-- merge step executed with provided merge script (batch Parquet merger)
+- merge step executed with the provided merge script (batch Parquet merger)
 
 **Note:** Schema consistency and disk space checked before final merge.
 
@@ -35,4 +36,4 @@ pip install -r requirements.txt
 
 ##3 merge.py ( this code is merging all parquet into 1 )
 
-##3 dnscope_mini_figs.py ( this code is extracting all the results from the 1 parquet file and creating figures " modify as you please ")
+##4 dnscope_mini_figs.py ( this code is extracting all the results from the 1 parquet file and creating figures " modify as you please ")
