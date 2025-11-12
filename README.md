@@ -24,10 +24,15 @@ A Python tool for analyzing **DNS Internet Background Radiation (IBR)** from PCA
 **Note:** Schema consistency and disk space checked before final merge.
 
 ## How to use?
+
 ##0 python3 -m venv ~/your-dir/venv2
 source ~/your-dir/venv2/bin/activate
 pip install -r requirements.txt
+
 ##1 fast_extract.py ( this code is turning your ZIP file into CSV
+
 ##2 csv_to_parquet_addcols.py ( this code is turning your CSV file into parquet " check the code and modify as you please ")
+
 ##3 merge.py ( this code is merging all parquet into 1 )
+
 ##3 dnscope_mini_figs.py ( this code is extracting all the results from the 1 parquet file and creating figures " modify as you please ")
