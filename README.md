@@ -37,3 +37,7 @@ pip install -r requirements.txt
 ##3 merge.py ( this code is merging all parquet into 1 )
 
 ##4 dnscope_mini_figs.py ( this code is extracting all the results from the 1 parquet file and creating figures " modify as you please ")
+
+## Anaconda-path
+You can use another way to get the results for each questions
+below I will share what i personally used for each qeustions
