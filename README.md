@@ -39,5 +39,10 @@ pip install -r requirements.txt
 ##4 dnscope_mini_figs.py ( this code is extracting all the results from the 1 parquet file and creating figures " modify as you please ")
 
 ## Anaconda-path
-You can use another way to get the results for each questions
+You can use another way to get the results for each question
 below I will share what i personally used for each qeustions
+
+for RQ1 I used : RQ1.py file 
+for RQ2 I used : RQ2.py file 
+for RQ3 I used : RQ3.py file 
+All these files are in the uploaded 
