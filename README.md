@@ -2,47 +2,127 @@
 
 ![Banner](images/banner2.png)
 
-A Python tool for analysing **DNS Internet Background Radiation (IBR)** from PCAP/PCAPNG files. Built as part of the **Bachelor Project (C8 – Noroff University, Cyber Security)** using **Cloud Telescope** datasets.
----
-# DNS-in-IBR — Processing log (concise)
+A Python tool for analysing **DNS Internet Background Radiation (IBR)** from PCAP/PCAPNG files. Built as part of the **Bachelor Project in Cyber Security at Noroff University College** using the [Cloud Telescope](https://doi.org/10.21227/zkyy-gk56) dataset.
 
 **Author:** Mohammed Altanib
 
-**One-line summary:** Decrypted/unzipped PCAPs → temporary CSVs → Parquet files → now merging ~21k Parquet files. Two scripts used.
+---
 
-## Steps
-1. **Decrypted / unzipped** raw archive (`cloud_telescope_raw_dataset_3.zip`) → `/mnt/data/dataset3_full/e3/`  
-2. **Extracted DNS** to temporary CSVs using `tshark` → `/tmp/dns_fast_8xjoxii_/dns_*.csv`  
-3. **Converted CSV → Parquet** with `csv_to_parquet_addcols.py` (adds `src_24`, `eTLD+1`) → `/mnt/data/dataset3_parquet/e3/dns_*.parquet`  
-4. **Merging now:** merging ~21k Parquet files into unified dataset using two scripts (conversion + merge).
-5. **Analyse the complete required parquet file.
- 
-## Core scripts
-- `fast_extract.py` — pcap → CSV (tshark)
-- `csv_to_parquet_addcols.py` — CSV → Parquet (adds analysis columns)
-- merge step executed with the provided merge script (batch Parquet merger)
+## Overview
 
-**Note:** Schema consistency and disk space checked before final merge.
+DNScope extracts, structures, and analyses DNS traffic from raw passive packet captures. The pipeline converts compressed PCAPs into a unified Parquet dataset and produces visualisations and summary tables for three research questions.
 
-## How to use?
+| RQ  | Question |
+|-----|----------|
+| RQ1 | DNS share of IBR across regions and time |
+| RQ2 | Dominant query types and response codes |
+| RQ3 | Source networks and geographic distribution |
 
-##0 python3 -m venv ~/your-dir/venv2
-source ~/your-dir/venv2/bin/activate
+---
+
+## Pipeline
+
+```
+ZIP/PCAP -> CSV (tshark) -> Parquet -> Merged Parquet -> Results
+```
+
+1. **Decrypt and unzip** raw archive into individual PCAP files
+2. **Extract DNS** fields to temporary CSV files using tshark
+3. **Convert CSV to Parquet** using `csv_to_parquet_addcols.py` which adds `src_24` and `eTLD+1` columns
+4. **Merge** all Parquet files into one unified dataset using `merge.py`
+5. **Analyse** the merged Parquet file using `Results.py`
+
+---
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `fast_extract.py` | PCAP/ZIP to CSV via tshark |
+| `csv_to_parquet_addcols.py` | CSV to Parquet with `src_24` and `eTLD+1` |
+| `merge.py` | Merge all Parquet files into one |
+| `Results.py` | Main analysis script - RQ1, RQ2, RQ3 |
+| `dnscope_mini_figs.py` | Generate figures from merged Parquet |
+| `RQ1.py` | DNS share analysis (RQ1) |
+| `RQ2.py` | Query and response structure (RQ2) |
+| `RQ3.py` | Source network and geographic analysis (RQ3) |
+
+---
+
+## How to Use
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+python fast_extract.py
+python csv_to_parquet_addcols.py
+python merge.py
+python dnscope_mini_figs.py
+python RQ1.py
+python RQ2.py
+python RQ3.py
+python Results.py
+```
 
-##1 fast_extract.py ( this code is turning your ZIP file into CSV
+---
 
-##2 csv_to_parquet_addcols.py ( this code is turning your CSV file into parquet " check the code and modify as you please ")
+## Usage in Jupyter / Anaconda
 
-##3 merge.py ( this code is merging all parquet into 1 )
+```python
+from Results import dnscope_mini
 
-##4 dnscope_mini_figs.py ( this code is extracting all the results from the 1 parquet file and creating figures " modify as you please ")
+results = dnscope_mini(
+    src="e3_merged.parquet",
+    out="run_out",
+    topn=20,
+    show=True
+)
 
-## Anaconda-path
-You can use another way to get the results for each question
-below I will share what i personally used for each qeustions
+daily       = results["daily"]           # RQ1: daily DNS counts
+regional    = results["regional_daily"]  # RQ1: per-region counts
+qtype_rcode = results["qtype_rcode"]     # RQ2: QTYPE x RCODE
+daily_any   = results["daily_any"]       # RQ2: ANY share per day
+top_src24   = results["top_src24"]       # RQ3: top /24 prefixes
+top_etld1   = results["top_etld1"]       # RQ3: top domains
+```
 
-for RQ1 I used : RQ1.py file 
-for RQ2 I used : RQ2.py file 
-for RQ3 I used : RQ3.py file 
-All these files are in the uploaded 
+---
+
+## Output
+
+```
+run_out/
+├── tables/
+│   ├── daily_global.csv         RQ1 - DNS events per day
+│   ├── regional_daily.csv       RQ1 - per-region daily counts
+│   ├── qtype_rcode.csv          RQ2 - QTYPE x RCODE counts
+│   ├── daily_any.csv            RQ2 - ANY query share per day
+│   ├── top_src24.csv            RQ3 - top /24 source prefixes
+│   └── top_etld1.csv            RQ3 - top eTLD+1 domains
+└── figs/
+    ├── daily_dns.png            RQ1 - daily DNS events
+    ├── regional_daily_*.png     RQ1 - per-region charts
+    ├── qtype_rcode_heatmap.png  RQ2 - QTYPE x RCODE heatmap
+    ├── daily_any_pct.png        RQ2 - ANY share over time
+    ├── top_src24.png            RQ3 - top /24 bar chart
+    └── top_etld1.png            RQ3 - top domains bar chart
+```
+
+---
+
+## Dataset
+
+Developed and tested using the [Cloud Telescope IBR Dataset](https://doi.org/10.21227/zkyy-gk56), collected between October 2023 and March 2024 across 26 AWS regions, comprising 530 million packets.
+
+---
+
+## Requirements
+
+See `requirements.txt` for full list of dependencies. Main libraries: `duckdb`, `pandas`, `matplotlib`, `pyarrow`, `tldextract`, `geoip2`
+
+---
+
+## License
+
+MIT License - see `LICENSE` for details.
