@@ -1,6 +1,6 @@
 # DNScope 🔍
 
-![Banner](images/banner.png)
+![Banner](images/ban.png)
 
 A Python tool for analysing **DNS Internet Background Radiation (IBR)** from PCAP/PCAPNG files. Built as part of the **Bachelor Project in Cyber Security at Noroff University College** using the [Cloud Telescope](https://doi.org/10.21227/zkyy-gk56) dataset.
 
