@@ -85,7 +85,6 @@ python RQ1.py
 python RQ2.py
 python RQ3.py
 
-python Results.py
 ```
 
 ---
