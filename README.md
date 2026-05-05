@@ -28,9 +28,9 @@ ZIP/PCAP -> CSV (tshark) -> Parquet -> Merged Parquet -> Results
 
 1. **Decrypt and unzip** raw archive into individual PCAP files
 2. **Extract DNS** fields to temporary CSV files using tshark
-3. **Convert CSV to Parquet** using `csv_to_parquet_addcols.py` which adds `src_24` and `eTLD+1` columns
+3. **Convert CSV to Parquet** using `csv_to_parquet_addcols.py`, which adds `src_24` and `eTLD+1` columns
 4. **Merge** all Parquet files into one unified dataset using `merge.py`
-5. **Analyse** the merged Parquet file using `Results.py`
+5. **Analyse** the merged Parquet file using the research-question scripts and/or `Results.py`
 
 ---
 
@@ -41,11 +41,32 @@ ZIP/PCAP -> CSV (tshark) -> Parquet -> Merged Parquet -> Results
 | `fast_extract.py` | PCAP/ZIP to CSV via tshark |
 | `csv_to_parquet_addcols.py` | CSV to Parquet with `src_24` and `eTLD+1` |
 | `merge.py` | Merge all Parquet files into one |
-| `Results.py` | Main analysis script - RQ1, RQ2, RQ3 |
+| `Results.py` | Combined analysis workflow used during development |
 | `dnscope_mini_figs.py` | Generate figures from merged Parquet |
 | `RQ1.py` | DNS share analysis (RQ1) |
-| `RQ2.py` | Query and response structure (RQ2) |
+| `RQ2.py` | Query and response structure analysis (RQ2) |
 | `RQ3.py` | Source network and geographic analysis (RQ3) |
+
+---
+
+## Research Question Scripts
+
+The original analysis was developed in `Results.py` and in the accompanying Jupyter Notebook.
+
+For clarity and artefact review, the RQ2 and RQ3 logic has also been separated into standalone scripts:
+
+- `RQ2.py`: reproduces the DNS query/response structure analysis, including QTYPE, RCODE, queries vs responses, and top eTLD+1 domains.
+- `RQ3.py`: reproduces the source network and geographic analysis, including source /24 prefixes and country-level GeoIP mapping.
+
+For RQ3 country-level results, the external MaxMind database file `GeoLite2-Country.mmdb` is required and should be placed in the project root before running the script.
+
+---
+
+## Jupyter Notebook
+
+A Jupyter Notebook is also included as supporting material. It contains the working analysis notes and shows the analysis process used during the project from start to finish.
+
+The standalone Python scripts are provided for reproducibility and artefact review, while the notebook documents the exploratory workflow.
 
 ---
 
@@ -55,13 +76,15 @@ ZIP/PCAP -> CSV (tshark) -> Parquet -> Merged Parquet -> Results
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
 python fast_extract.py
 python csv_to_parquet_addcols.py
 python merge.py
-python dnscope_mini_figs.py
+
 python RQ1.py
 python RQ2.py
 python RQ3.py
+
 python Results.py
 ```
 
@@ -115,11 +138,24 @@ run_out/
 
 Developed and tested using the [Cloud Telescope IBR Dataset](https://doi.org/10.21227/zkyy-gk56), collected between October 2023 and March 2024 across 26 AWS regions, comprising 530 million packets.
 
+Large raw PCAP files are not included in this repository because of file size and privacy limitations.
+
 ---
 
 ## Requirements
 
-See `requirements.txt` for full list of dependencies. Main libraries: `duckdb`, `pandas`, `matplotlib`, `pyarrow`, `tldextract`, `geoip2`
+See `requirements.txt` for the full list of dependencies.
+
+Main libraries:
+
+- `duckdb`
+- `pandas`
+- `matplotlib`
+- `pyarrow`
+- `tldextract`
+- `geoip2`
+
+For RQ3 country-level mapping, `GeoLite2-Country.mmdb` is required as an external GeoIP database.
 
 ---
 
