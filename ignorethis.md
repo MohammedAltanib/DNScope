@@ -116,6 +116,10 @@ python build_rq1_all_regions.py
 
 
 here we go now we have rq1_all_regions.parquet
+
 later only use rq1.py
+
 i will edit that later if they asked to 
+
  r u reading ?! all respcet prof
+ 
