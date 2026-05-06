@@ -156,6 +156,62 @@ Main libraries:
 
 For RQ3 country-level mapping, `GeoLite2-Country.mmdb` is required as an external GeoIP database.
 
+## Rebuilding RQ1 Intermediate File
+
+RQ1 does not rely only on `e3_merged.parquet`, because RQ1 measures the DNS share of the total IBR traffic:
+
+```text
+dns_share = dns_pkts / total_pkts
+```
+
+For this reason, RQ1 requires an intermediate file named:
+
+```text
+rq1_all_regions.parquet
+```
+
+This file is generated from the original PCAP files and their metadata by `build_rq1_all_regions.py`.
+
+The script counts:
+
+- total packets per region/time bin
+- DNS packets per region/time bin
+
+Then it calculates `dns_share` for each region and time bin.
+
+### RQ1 execution steps
+
+```bash
+sudo apt update
+sudo apt install python3-venv tshark -y
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install pandas pyarrow duckdb matplotlib pytz
+
+python build_rq1_all_regions.py
+```
+
+After this step, the following file is created:
+
+```bash
+rq1_all_regions.parquet
+```
+
+Then run:
+
+```bash
+python RQ1.py
+```
+
+This produces the RQ1 figures:
+
+```text
+Figure_RQ1_1_timeseries_top_regions.png
+Figure_RQ1_2_bar_overall_share_top15.png
+```
+
 ---
 
 ## License
